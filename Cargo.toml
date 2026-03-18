@@ -1,0 +1,32 @@
+[package]
+name = "roblox-flag-editor"
+version = "1.0.0"
+edition = "2021"
+description = "Roblox Fast Flags Editor - Edit and apply Roblox client Fast Flags"
+authors = ["diep"]
+
+[[bin]]
+name = "roblox-flag-editor"
+path = "src/main.rs"
+
+[dependencies]
+eframe = { version = "0.33", default-features = false, features = [
+    "default_fonts",
+    "glow",
+] }
+egui = "0.33"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rfd = "0.17"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+
+# Windows: no console window
+[target.'cfg(windows)'.build-dependencies]
+
+[target.'cfg(windows)']
+# Prevent console window in release builds
