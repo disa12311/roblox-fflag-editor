@@ -1,32 +1,20 @@
 //! ui/modal.rs — "Add New Flag" modal dialog
-//!
-//! Renders a centred overlay window with:
-//!   • Key input   (must be non-empty)
-//!   • Value input (any string; auto-typed to bool/number on save)
-//!   • Add button  (also triggered by Enter)
-//!   • Cancel button
 
-use eframe::egui::{self, Color32, Id, Key, RichText};
+use eframe::egui::{self, CornerRadius, Id, Key, Margin, RichText, Stroke};
 
-use crate::App;
+use crate::{ui::theme, App};
 
 // ─── State ────────────────────────────────────────────────────────────────────
 
-/// State for the Add-flag modal, owned by `App`.
 #[derive(Default)]
 pub struct AddModal {
-    pub open: bool,
-    pub key: String,
-    pub value: String,
-    pub error: String,
-    /// True only on the very first frame after opening — used to auto-focus
-    /// the Key field exactly once without stealing focus every frame.
+    pub open:        bool,
+    pub key:         String,
+    pub value:       String,
+    pub error:       String,
+    /// Focus Key field exactly once when the modal first opens.
     pub just_opened: bool,
 }
-
-// ─── Stable widget IDs ────────────────────────────────────────────────────────
-// Fixed IDs prevent egui from reassigning widget identity across redraws,
-// which would cause focus to be lost after every keystroke.
 
 const ID_KEY:   &str = "add_modal_key";
 const ID_VALUE: &str = "add_modal_value";
@@ -36,50 +24,61 @@ const ID_VALUE: &str = "add_modal_value";
 pub fn show(ctx: &egui::Context, app: &mut App) {
     let mut open = app.add_modal.open;
 
-    egui::Window::new("Add New Fast Flag")
+    // egui 0.33: Frame::corner_radius (was .rounding), Margin takes i8
+    let window_frame = egui::Frame::window(&ctx.style())
+        .fill(theme::BG_PANEL)
+        .stroke(Stroke::new(1.0, theme::BORDER))
+        .corner_radius(CornerRadius::same(8))
+        .inner_margin(Margin::same(16));
+
+    egui::Window::new(RichText::new("Add New Fast Flag").color(theme::TEXT).strong())
         .open(&mut open)
         .resizable(false)
         .collapsible(false)
         .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-        .fixed_size([420.0, 200.0])
+        .fixed_size([440.0, 210.0])
+        .frame(window_frame)
         .show(ctx, |ui| {
             ui.vertical(|ui| {
+                ui.spacing_mut().item_spacing.y = 6.0;
+
                 // ── Key ───────────────────────────────────────────────────
-                ui.label("Flag Name (key):");
+                ui.label(RichText::new("Flag Name (key)").color(theme::TEXT_DIM).small());
                 ui.add(
                     egui::TextEdit::singleline(&mut app.add_modal.key)
                         .id(Id::new(ID_KEY))
                         .hint_text("e.g. FFlagSomething")
                         .font(egui::TextStyle::Monospace)
-                        .desired_width(f32::INFINITY),
-                );
-
-                ui.add_space(6.0);
-
-                // ── Value ─────────────────────────────────────────────────
-                ui.label("Value:");
-                ui.add(
-                    egui::TextEdit::singleline(&mut app.add_modal.value)
-                        .id(Id::new(ID_VALUE))
-                        .hint_text("true / false / 42 / some-string")
-                        .font(egui::TextStyle::Monospace)
+                        .text_color(theme::TEXT)
                         .desired_width(f32::INFINITY),
                 );
 
                 ui.add_space(4.0);
 
-                // ── Inline type hint ──────────────────────────────────────
-                ui.label(
-                    RichText::new(format!("Type: {}", infer_type_label(&app.add_modal.value)))
-                        .small()
-                        .color(Color32::GRAY),
+                // ── Value ─────────────────────────────────────────────────
+                ui.label(RichText::new("Value").color(theme::TEXT_DIM).small());
+                ui.add(
+                    egui::TextEdit::singleline(&mut app.add_modal.value)
+                        .id(Id::new(ID_VALUE))
+                        .hint_text("true / false / 42 / some-string")
+                        .font(egui::TextStyle::Monospace)
+                        .text_color(theme::TEXT)
+                        .desired_width(f32::INFINITY),
                 );
 
-                // ── Error message ─────────────────────────────────────────
+                // ── Type hint ─────────────────────────────────────────────
+                ui.label(
+                    RichText::new(format!("→ {}", infer_type_label(&app.add_modal.value)))
+                        .small()
+                        .color(theme::ACCENT_BLUE),
+                );
+
+                // ── Error ─────────────────────────────────────────────────
                 if !app.add_modal.error.is_empty() {
                     ui.label(
                         RichText::new(&app.add_modal.error)
-                            .color(Color32::from_rgb(220, 80, 80)),
+                            .color(theme::ACCENT_RED)
+                            .small(),
                     );
                 }
 
@@ -87,22 +86,29 @@ pub fn show(ctx: &egui::Context, app: &mut App) {
 
                 // ── Buttons ───────────────────────────────────────────────
                 ui.horizontal(|ui| {
-                    let enter_pressed = ui.input(|i| i.key_pressed(Key::Enter));
-                    if ui
-                        .button(RichText::new("➕  Add Flag").color(Color32::from_rgb(100, 200, 100)))
-                        .clicked()
-                        || enter_pressed
-                    {
+                    let add_btn = egui::Button::new(
+                        RichText::new("➕  Add Flag").color(theme::ACCENT_GREEN),
+                    )
+                    .fill(theme::BG_WIDGET)
+                    .stroke(Stroke::new(1.0, theme::ACCENT_GREEN));
+
+                    let enter = ui.input(|i| i.key_pressed(Key::Enter));
+                    if ui.add(add_btn).clicked() || enter {
                         try_add(app);
                     }
-                    if ui.button("Cancel").clicked() {
+
+                    let cancel_btn = egui::Button::new(
+                        RichText::new("Cancel").color(theme::TEXT_DIM),
+                    )
+                    .fill(theme::BG_WIDGET)
+                    .stroke(Stroke::new(1.0, theme::BORDER));
+
+                    if ui.add(cancel_btn).clicked() {
                         app.add_modal.open = false;
                     }
                 });
 
-                // Auto-focus Key field only on the first frame after opening.
-                // Calling request_focus() every frame would steal focus from
-                // the Value field whenever the user tries to type there.
+                // Focus Key field only on the very first frame after open.
                 if app.add_modal.just_opened {
                     ctx.memory_mut(|mem| mem.request_focus(Id::new(ID_KEY)));
                     app.add_modal.just_opened = false;

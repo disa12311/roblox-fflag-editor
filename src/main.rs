@@ -99,11 +99,14 @@ impl StatusMsg {
 }
 
 impl App {
-    fn new(_cc: &eframe::CreationContext<'_>) -> Self {
+    fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        // Apply dark theme once at startup
+        ui::theme::apply(&cc.egui_ctx);
+
         let mut store = FlagStore::new();
         let status = match store.load() {
             Ok(path) => StatusMsg::ok(format!("Loaded from: {}", path)),
-            Err(e) => StatusMsg::err(format!("Could not load flags: {e}")),
+            Err(e)   => StatusMsg::err(format!("Could not load flags: {e}")),
         };
 
         Self {
@@ -137,20 +140,25 @@ impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.status.tick();
 
+        // Keep panels using the theme's panel colour
+        let panel_frame = egui::Frame::side_top_panel(&ctx.style())
+            .fill(ui::theme::BG_PANEL)
+            .inner_margin(egui::Margin::symmetric(10, 6));
+
         // ── Top toolbar ──
-        egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
-            ui::toolbar::show(ui, self);
-        });
+        egui::TopBottomPanel::top("toolbar")
+            .frame(panel_frame)
+            .show(ctx, |ui| { ui::toolbar::show(ui, self); });
 
         // ── Status bar ──
-        egui::TopBottomPanel::bottom("statusbar").show(ctx, |ui| {
-            ui::statusbar::show(ui, &self.status);
-        });
+        egui::TopBottomPanel::bottom("statusbar")
+            .frame(panel_frame)
+            .show(ctx, |ui| { ui::statusbar::show(ui, &self.status); });
 
         // ── Main table ──
-        egui::CentralPanel::default().show(ctx, |ui| {
-            ui::table::show(ui, self);
-        });
+        egui::CentralPanel::default()
+            .frame(egui::Frame::central_panel(&ctx.style()).fill(ui::theme::BG_APP))
+            .show(ctx, |ui| { ui::table::show(ui, self); });
 
         // ── Add-flag modal (rendered on top) ──
         if self.add_modal.open {

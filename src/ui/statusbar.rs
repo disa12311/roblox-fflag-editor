@@ -1,20 +1,22 @@
 //! ui/statusbar.rs — Bottom status bar
 
-use eframe::egui::{self, Color32, RichText};
+use eframe::egui::{self, RichText};
 
-use crate::StatusMsg;
+use crate::{ui::theme, StatusMsg};
 
 pub fn show(ui: &mut egui::Ui, status: &StatusMsg) {
     ui.horizontal(|ui| {
-        if status.text.is_empty() {
-            ui.label(RichText::new("Ready").color(Color32::GRAY).small());
+        let (icon, color) = if status.text.is_empty() {
+            ("●", theme::TEXT_DIM)
+        } else if status.is_error {
+            ("✘", theme::ACCENT_RED)
         } else {
-            let color = if status.is_error {
-                Color32::from_rgb(220, 80, 80)
-            } else {
-                Color32::from_rgb(100, 220, 100)
-            };
-            ui.label(RichText::new(&status.text).color(color).small());
-        }
+            ("✔", theme::ACCENT_GREEN)
+        };
+
+        ui.label(RichText::new(icon).color(color).small());
+
+        let msg = if status.text.is_empty() { "Ready" } else { &status.text };
+        ui.label(RichText::new(msg).color(color).small());
     });
 }

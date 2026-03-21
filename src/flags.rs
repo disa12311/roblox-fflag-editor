@@ -44,13 +44,28 @@ impl FlagStore {
 
     // ── Path Detection ────────────────────────────────────────────────────────
 
-    /// Detect `ClientAppSettings.json` path for the latest Roblox version.
+    /// Auto-detect `ClientAppSettings.json` for the active Roblox Player install.
     ///
-    /// Search order:
-    /// 1. `%LocalAppData%\Roblox\Versions\version-*\ClientSettings\ClientAppSettings.json`
-    ///    → picks the most recently modified version folder.
-    /// 2. Fallback: construct path even if it doesn't exist (so Save can create it).
+    /// Detection strategy (in priority order):
+    ///
+    /// 1. **Registry** — read `HKCU\Software\Roblox\RobloxStudio` or the
+    ///    RobloxPlayer uninstall key to get the exact install path.
+    /// 2. **Exe scan** — walk `%LocalAppData%\Roblox\Versions\version-*\` and
+    ///    find the folder that actually contains `RobloxPlayerBeta.exe`.
+    ///    This is more reliable than mtime because Studio updates also touch
+    ///    version folders, which would make mtime pick the wrong one.
+    /// 3. **mtime fallback** — if no exe is found (e.g. portable install),
+    ///    fall back to the most recently modified `version-*` folder.
+    ///
+    /// The `ClientSettings/` directory and `ClientAppSettings.json` file do
+    /// not need to exist — they will be created by `save()`.
     pub fn detect_path() -> Result<PathBuf, String> {
+        // ── 1. Registry ───────────────────────────────────────────────────────
+        if let Some(path) = Self::detect_via_registry() {
+            return Ok(path);
+        }
+
+        // ── 2 & 3. Filesystem scan ────────────────────────────────────────────
         let local_appdata = env::var("LOCALAPPDATA")
             .map_err(|_| "LOCALAPPDATA environment variable not found".to_string())?;
 
@@ -60,42 +75,107 @@ impl FlagStore {
 
         if !versions_dir.exists() {
             return Err(format!(
-                "Roblox not found at {}",
+                "Roblox not installed (directory not found: {})",
                 versions_dir.display()
             ));
         }
 
-        // Collect all `version-*` subdirectories, pick newest by modification time.
-        let mut candidates: Vec<(PathBuf, std::time::SystemTime)> = fs::read_dir(&versions_dir)
-            .map_err(|e| format!("Cannot read Versions dir: {e}"))?
-            .filter_map(|entry| {
-                let entry = entry.ok()?;
-                let name = entry.file_name().to_string_lossy().to_string();
-                if !name.starts_with("version-") {
-                    return None;
-                }
-                let meta = entry.metadata().ok()?;
-                if !meta.is_dir() {
-                    return None;
-                }
-                let mtime = meta.modified().ok()?;
-                Some((entry.path(), mtime))
-            })
-            .collect();
+        // Collect all version-* subdirs with their metadata.
+        let mut candidates: Vec<(PathBuf, std::time::SystemTime)> =
+            fs::read_dir(&versions_dir)
+                .map_err(|e| format!("Cannot read Versions dir: {e}"))?
+                .filter_map(|entry| {
+                    let entry = entry.ok()?;
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    if !name.starts_with("version-") {
+                        return None;
+                    }
+                    let meta = entry.metadata().ok()?;
+                    if !meta.is_dir() {
+                        return None;
+                    }
+                    Some((entry.path(), meta.modified().unwrap_or(std::time::UNIX_EPOCH)))
+                })
+                .collect();
 
         if candidates.is_empty() {
-            return Err("No Roblox version folders found in Versions directory".to_string());
+            return Err("No Roblox version folders found".to_string());
         }
 
-        // Sort descending by modification time → newest first.
+        // Strategy 2: prefer the folder that has RobloxPlayerBeta.exe
+        // (ignores Studio-only version folders).
+        if let Some((player_dir, _)) = candidates
+            .iter()
+            .find(|(dir, _)| dir.join("RobloxPlayerBeta.exe").exists())
+        {
+            return Ok(player_dir
+                .join("ClientSettings")
+                .join("ClientAppSettings.json"));
+        }
+
+        // Strategy 3: mtime fallback — newest folder wins.
         candidates.sort_by(|a, b| b.1.cmp(&a.1));
-
-        let latest = &candidates[0].0;
-        let settings_path = latest
+        Ok(candidates[0]
+            .0
             .join("ClientSettings")
-            .join("ClientAppSettings.json");
+            .join("ClientAppSettings.json"))
+    }
 
-        Ok(settings_path)
+    /// Try reading the Roblox Player install path from the Windows registry.
+    ///
+    /// Checks (in order):
+    ///   HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\roblox-player  → InstallLocation
+    ///   HKCU\Software\Roblox\RobloxStudio                                        → (skip — Studio)
+    ///
+    /// Returns `None` if the registry key doesn't exist or we're not on Windows.
+    fn detect_via_registry() -> Option<PathBuf> {
+        // Only compiled on Windows targets.
+        #[cfg(target_os = "windows")]
+        {
+            use std::process::Command;
+
+            // Query the RobloxPlayer uninstall entry for its InstallLocation.
+            // We use `reg query` (always available on Windows) to avoid adding
+            // a `winreg` crate dependency.
+            let output = Command::new("reg")
+                .args([
+                    "query",
+                    r"HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\roblox-player",
+                    "/v",
+                    "InstallLocation",
+                ])
+                .output()
+                .ok()?;
+
+            if !output.status.success() {
+                return None;
+            }
+
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            // reg query output format:
+            //   InstallLocation    REG_SZ    C:\Users\...\Roblox\Versions\version-abc123
+            for line in stdout.lines() {
+                let line = line.trim();
+                if line.contains("InstallLocation") {
+                    // Split on "REG_SZ" and take whatever follows.
+                    if let Some(pos) = line.find("REG_SZ") {
+                        let location = line[pos + "REG_SZ".len()..].trim();
+                        if !location.is_empty() {
+                            let path = PathBuf::from(location)
+                                .join("ClientSettings")
+                                .join("ClientAppSettings.json");
+                            return Some(path);
+                        }
+                    }
+                }
+            }
+            None
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            None
+        }
     }
 
     // ── Load ──────────────────────────────────────────────────────────────────
