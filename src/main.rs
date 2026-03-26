@@ -1,22 +1,24 @@
-//! Roblox Fast Flags Editor
+//! Roblox Fast Flags Editor v2.0.0
 //!
-//! A GUI application to view, edit, and apply Roblox Fast Flags stored in
-//! `%LocalAppData%\Roblox\Versions\*\ClientSettings\ClientAppSettings.json`.
+//! GUI application to view, edit, and apply Roblox Fast Flags.
+//! Target: x86_64-pc-windows-gnu   Edition: Rust 2024
 //!
-//! # Architecture
-//! - `main.rs`         — Entry point, app state, egui render loop
-//! - `flags.rs`        — Flag loading, saving, path detection
-//! - `ui/mod.rs`       — UI helper widgets
-//! - `ui/toolbar.rs`   — Top toolbar (search, add, reset, import/export)
-//! - `ui/table.rs`     — Flags table with edit/delete
-//! - `ui/modal.rs`     — Add-flag modal dialog
+//! Architecture
+//! ─────────────
+//! main.rs      — App state, eframe render loop
+//! flags.rs     — FlagStore: detect path, load, save, reset
+//! ui/theme.rs  — Dark colour palette + egui Visuals
+//! ui/toolbar.rs — Search, Add, Apply, Reset, Import, Export
+//! ui/table.rs  — Scrollable flags grid with inline editing
+//! ui/modal.rs  — "Add New Flag" dialog
+//! ui/statusbar.rs — Bottom status bar
 
-#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")] // hide console on Windows release
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod flags;
 mod ui;
 
-use eframe::{egui, NativeOptions};
+use eframe::{NativeOptions, egui};
 use egui::ViewportBuilder;
 use flags::FlagStore;
 
@@ -24,11 +26,10 @@ fn main() -> eframe::Result<()> {
     let options = NativeOptions {
         viewport: ViewportBuilder::default()
             .with_title("Roblox Fast Flags Editor")
-            .with_inner_size([900.0, 620.0])
+            .with_inner_size([920.0, 640.0])
             .with_min_inner_size([600.0, 400.0]),
         ..Default::default()
     };
-
     eframe::run_native(
         "Roblox Fast Flags Editor",
         options,
@@ -36,79 +37,53 @@ fn main() -> eframe::Result<()> {
     )
 }
 
-// ─── App State ───────────────────────────────────────────────────────────────
+// ─── Status message ───────────────────────────────────────────────────────────
 
-/// Root application state.
-pub struct App {
-    /// The in-memory flag store (key → value pairs).
-    store: FlagStore,
-
-    /// Current search query for filtering flags.
-    search: String,
-
-    /// State for the "Add New Flag" modal.
-    add_modal: ui::modal::AddModal,
-
-    /// Transient status message shown at the bottom.
-    status: StatusMsg,
-}
-
-/// A status message with an optional expiry (frame counter).
-struct StatusMsg {
-    text: String,
-    /// Countdown frames until the message clears (0 = permanent until overwritten)
-    ttl: u32,
-    is_error: bool,
+pub struct StatusMsg {
+    pub text:     String,
+    pub ttl:      u32,      // frames remaining; 0 = persist until overwritten
+    pub is_error: bool,
 }
 
 impl Default for StatusMsg {
     fn default() -> Self {
-        Self {
-            text: String::new(),
-            ttl: 0,
-            is_error: false,
-        }
+        Self { text: String::new(), ttl: 0, is_error: false }
     }
 }
 
 impl StatusMsg {
-    fn ok(text: impl Into<String>) -> Self {
-        Self {
-            text: text.into(),
-            ttl: 180, // ~3 seconds at 60fps
-            is_error: false,
-        }
+    pub fn ok(text: impl Into<String>) -> Self {
+        Self { text: text.into(), ttl: 180, is_error: false }
     }
-
-    fn err(text: impl Into<String>) -> Self {
-        Self {
-            text: text.into(),
-            ttl: 300,
-            is_error: true,
-        }
+    pub fn err(text: impl Into<String>) -> Self {
+        Self { text: text.into(), ttl: 300, is_error: true }
     }
-
-    fn tick(&mut self) {
+    pub fn tick(&mut self) {
         if self.ttl > 0 {
             self.ttl -= 1;
-            if self.ttl == 0 {
-                self.text.clear();
-            }
+            if self.ttl == 0 { self.text.clear(); }
         }
     }
 }
 
+// ─── App state ────────────────────────────────────────────────────────────────
+
+pub struct App {
+    pub store:     FlagStore,
+    pub search:    String,
+    pub add_modal: ui::modal::AddModal,
+    pub status:    StatusMsg,
+}
+
 impl App {
     fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        // Apply dark theme once at startup
         ui::theme::apply(&cc.egui_ctx);
 
         let mut store = FlagStore::new();
         let status = match store.load() {
-            Ok(path) => StatusMsg::ok(format!("Loaded from: {}", path)),
+            Ok(path) => StatusMsg::ok(format!("Loaded: {path}")),
             Err(e)   => StatusMsg::err(format!("Could not load flags: {e}")),
         };
-
         Self {
             store,
             search: String::new(),
@@ -117,21 +92,17 @@ impl App {
         }
     }
 
-    /// Apply changes: write the JSON file to the Roblox ClientSettings path.
-    fn apply(&mut self) {
+    pub fn apply(&mut self) {
         self.status = match self.store.save() {
-            Ok(path) => StatusMsg::ok(format!("✔ Applied to: {}", path)),
-            Err(e) => StatusMsg::err(format!("✘ Save failed: {e}")),
+            Ok(path) => StatusMsg::ok(format!("✔ Applied to: {path}")),
+            Err(e)   => StatusMsg::err(format!("✘ Save failed: {e}")),
         };
     }
 
-    /// Reset: delete the ClientAppSettings.json file entirely.
-    fn reset(&mut self) {
+    pub fn reset(&mut self) {
         self.status = match self.store.reset() {
-            Ok(_) => {
-                StatusMsg::ok("✔ Reset: ClientAppSettings.json deleted (all flags cleared)")
-            }
-            Err(e) => StatusMsg::err(format!("✘ Reset failed: {e}")),
+            Ok(())  => StatusMsg::ok("✔ Reset: ClientAppSettings.json deleted"),
+            Err(e)  => StatusMsg::err(format!("✘ Reset failed: {e}")),
         };
     }
 }
@@ -140,27 +111,22 @@ impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.status.tick();
 
-        // Keep panels using the theme's panel colour
         let panel_frame = egui::Frame::side_top_panel(&ctx.style())
             .fill(ui::theme::BG_PANEL)
             .inner_margin(egui::Margin::symmetric(10, 6));
 
-        // ── Top toolbar ──
         egui::TopBottomPanel::top("toolbar")
             .frame(panel_frame)
-            .show(ctx, |ui| { ui::toolbar::show(ui, self); });
+            .show(ctx, |ui| ui::toolbar::show(ui, self));
 
-        // ── Status bar ──
         egui::TopBottomPanel::bottom("statusbar")
             .frame(panel_frame)
-            .show(ctx, |ui| { ui::statusbar::show(ui, &self.status); });
+            .show(ctx, |ui| ui::statusbar::show(ui, &self.status));
 
-        // ── Main table ──
         egui::CentralPanel::default()
             .frame(egui::Frame::central_panel(&ctx.style()).fill(ui::theme::BG_APP))
-            .show(ctx, |ui| { ui::table::show(ui, self); });
+            .show(ctx, |ui| ui::table::show(ui, self));
 
-        // ── Add-flag modal (rendered on top) ──
         if self.add_modal.open {
             ui::modal::show(ctx, self);
         }

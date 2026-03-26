@@ -2,21 +2,16 @@
 
 use eframe::egui::{self, RichText};
 
-use crate::{ui::theme, StatusMsg};
+use crate::{StatusMsg, ui::theme};
 
 pub fn show(ui: &mut egui::Ui, status: &StatusMsg) {
     ui.horizontal(|ui| {
-        let (icon, color) = if status.text.is_empty() {
-            ("●", theme::TEXT_DIM)
-        } else if status.is_error {
-            ("✘", theme::ACCENT_RED)
-        } else {
-            ("✔", theme::ACCENT_GREEN)
+        let (icon, color) = match (status.text.is_empty(), status.is_error) {
+            (true,  _    ) => ("●", theme::TEXT_DIM),
+            (false, true ) => ("✘", theme::ACCENT_RED),
+            (false, false) => ("✔", theme::ACCENT_GREEN),
         };
-
-        ui.label(RichText::new(icon).color(color).small());
-
-        let msg = if status.text.is_empty() { "Ready" } else { &status.text };
-        ui.label(RichText::new(msg).color(color).small());
+        let msg = if status.text.is_empty() { "Ready" } else { status.text.as_str() };
+        ui.label(RichText::new(format!("{icon}  {msg}")).color(color).small());
     });
 }

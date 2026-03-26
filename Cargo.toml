@@ -1,9 +1,10 @@
 [package]
 name = "roblox-flag-editor"
-version = "1.0.0"
-edition = "2021"
+version = "2.0.0"
+edition = "2024"
 description = "Roblox Fast Flags Editor - Edit and apply Roblox client Fast Flags"
 authors = ["diep"]
+build = "build.rs"
 
 [[bin]]
 name = "roblox-flag-editor"
@@ -25,8 +26,6 @@ lto = true
 codegen-units = 1
 strip = true
 
-# Windows: no console window
-[target.'cfg(windows)'.build-dependencies]
-
-[target.'cfg(windows)']
-# Prevent console window in release builds
+[build-dependencies]
+# Embeds icon + version info into the .exe as Win32 resources.
+winres = "0.1"

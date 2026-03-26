@@ -3,7 +3,7 @@
 use eframe::egui::{self, RichText, Stroke};
 use rfd::FileDialog;
 
-use crate::{ui::theme, App};
+use crate::{App, ui::theme};
 
 pub fn show(ui: &mut egui::Ui, app: &mut App) {
     ui.horizontal_wrapped(|ui| {
@@ -17,27 +17,27 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
                 .desired_width(200.0)
                 .text_color(theme::TEXT),
         );
-        if !app.search.is_empty() {
-            if styled_button(ui, "✖", theme::TEXT_DIM).clicked() {
-                app.search.clear();
-            }
+        if !app.search.is_empty()
+            && btn(ui, "✖", theme::TEXT_DIM).clicked()
+        {
+            app.search.clear();
         }
 
-        ui.add(egui::Separator::default().spacing(10.0));
+        sep(ui);
 
-        // ── Add flag ──────────────────────────────────────────────────────
-        if styled_button(ui, "➕  Add Flag", theme::ACCENT_GREEN).clicked() {
-            app.add_modal.open        = true;
-            app.add_modal.just_opened = true;
-            app.add_modal.key.clear();
-            app.add_modal.value.clear();
-            app.add_modal.error.clear();
+        // ── Add ───────────────────────────────────────────────────────────
+        if btn(ui, "➕  Add Flag", theme::ACCENT_GREEN).clicked() {
+            app.add_modal = crate::ui::modal::AddModal {
+                open:        true,
+                just_opened: true,
+                ..Default::default()
+            };
         }
 
-        ui.add(egui::Separator::default().spacing(10.0));
+        sep(ui);
 
         // ── Apply ─────────────────────────────────────────────────────────
-        if styled_button(ui, "✔  Apply to Roblox", theme::ACCENT_BLUE)
+        if btn(ui, "✔  Apply to Roblox", theme::ACCENT_BLUE)
             .on_hover_text("Write flags to ClientAppSettings.json")
             .clicked()
         {
@@ -45,18 +45,18 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
         }
 
         // ── Reset ─────────────────────────────────────────────────────────
-        if styled_button(ui, "🗑  Reset All", theme::ACCENT_RED)
+        if btn(ui, "🗑  Reset All", theme::ACCENT_RED)
             .on_hover_text("Delete ClientAppSettings.json (restores Roblox defaults)")
             .clicked()
         {
             app.reset();
         }
 
-        ui.add(egui::Separator::default().spacing(10.0));
+        sep(ui);
 
-        // ── Import preset ─────────────────────────────────────────────────
-        if styled_button(ui, "📂  Import", theme::TEXT)
-            .on_hover_text("Load flags from a JSON file")
+        // ── Import ────────────────────────────────────────────────────────
+        if btn(ui, "📂  Import", theme::TEXT)
+            .on_hover_text("Load flags from a JSON preset file")
             .clicked()
         {
             if let Some(path) = FileDialog::new()
@@ -64,20 +64,20 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
                 .set_title("Import Fast Flags Preset")
                 .pick_file()
             {
-                match app.store.load_from_file(&path) {
-                    Ok(()) => app.status = crate::StatusMsg::ok(format!(
+                app.status = match app.store.load_from_file(&path) {
+                    Ok(()) => crate::StatusMsg::ok(format!(
                         "✔ Imported {} flags from {}",
                         app.store.flags.len(),
                         path.display()
                     )),
-                    Err(e) => app.status = crate::StatusMsg::err(format!("✘ Import failed: {e}")),
-                }
+                    Err(e) => crate::StatusMsg::err(format!("✘ Import failed: {e}")),
+                };
             }
         }
 
-        // ── Export preset ─────────────────────────────────────────────────
-        if styled_button(ui, "💾  Export", theme::TEXT)
-            .on_hover_text("Save current flags to a JSON file")
+        // ── Export ────────────────────────────────────────────────────────
+        if btn(ui, "💾  Export", theme::TEXT)
+            .on_hover_text("Save current flags to a JSON preset file")
             .clicked()
         {
             if let Some(path) = FileDialog::new()
@@ -86,39 +86,42 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
                 .set_title("Export Fast Flags Preset")
                 .save_file()
             {
-                match app.store.export_to_file(&path) {
-                    Ok(()) => app.status = crate::StatusMsg::ok(format!(
-                        "✔ Exported to {}", path.display()
-                    )),
-                    Err(e) => app.status = crate::StatusMsg::err(format!("✘ Export failed: {e}")),
-                }
+                app.status = match app.store.export_to_file(&path) {
+                    Ok(())  => crate::StatusMsg::ok(format!("✔ Exported to {}", path.display())),
+                    Err(e)  => crate::StatusMsg::err(format!("✘ Export failed: {e}")),
+                };
             }
         }
 
-        ui.add(egui::Separator::default().spacing(10.0));
+        sep(ui);
 
-        // ── Flag count ────────────────────────────────────────────────────
+        // ── Count ─────────────────────────────────────────────────────────
         let total    = app.store.flags.len();
-        let filtered = app.store.flags.iter().filter(|f| flag_matches(f, &app.search)).count();
-        let count_text = if app.search.is_empty() {
+        let filtered = app.store.flags.iter().filter(|f| matches_query(f, &app.search)).count();
+        let label = if app.search.is_empty() {
             format!("{total} flag(s)")
         } else {
             format!("{filtered} / {total}")
         };
-        ui.label(RichText::new(count_text).color(theme::TEXT_DIM).small());
+        ui.label(RichText::new(label).color(theme::TEXT_DIM).small());
     });
 }
 
-/// A toolbar button with custom text colour and a subtle dark background.
-fn styled_button(ui: &mut egui::Ui, label: &str, color: egui::Color32) -> egui::Response {
-    let btn = egui::Button::new(RichText::new(label).color(color))
-        .fill(theme::BG_WIDGET)
-        .stroke(Stroke::new(1.0, theme::BORDER));
-    ui.add(btn)
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+fn btn(ui: &mut egui::Ui, label: &str, color: egui::Color32) -> egui::Response {
+    ui.add(
+        egui::Button::new(RichText::new(label).color(color))
+            .fill(theme::BG_WIDGET)
+            .stroke(Stroke::new(1.0, theme::BORDER)),
+    )
 }
 
-/// Whether a flag's key or value contains the search query (case-insensitive).
-pub fn flag_matches(flag: &crate::flags::Flag, query: &str) -> bool {
+fn sep(ui: &mut egui::Ui) {
+    ui.add(egui::Separator::default().spacing(10.0));
+}
+
+pub fn matches_query(flag: &crate::flags::Flag, query: &str) -> bool {
     if query.is_empty() { return true; }
     let q = query.to_lowercase();
     flag.key.to_lowercase().contains(&q) || flag.value.to_lowercase().contains(&q)

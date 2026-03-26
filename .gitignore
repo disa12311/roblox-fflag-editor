@@ -2,6 +2,10 @@
 /target/
 Cargo.lock
 
+# Generated resource files (produced by build.rs)
+*.res
+*.obj
+
 # IDE files
 .vscode/
 .idea/
