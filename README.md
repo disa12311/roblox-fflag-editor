@@ -1,97 +1,130 @@
-# Roblox Fast Flags Editor
+# Roblox Fast Flag Editor
 
-A Windows GUI application built with Rust + egui to edit Roblox's `ClientAppSettings.json` Fast Flags.
+A Windows desktop app built with **Rust 2024 + egui 0.33** to edit Roblox's
+`ClientAppSettings.json` Fast Flags — with a fully dark-themed GUI, smart
+auto-detection of the active Roblox installation, and zero runtime dependencies.
 
 ## Features
 
-- 🔍 **Search / filter** flags by name or value
-- ➕ **Add** new flags with auto-type detection (bool / int / float / string)
-- ✏️ **Edit** flag values inline in the table
-- 🗑 **Delete** individual flags
-- ✔ **Apply to Roblox** — writes directly to the latest Roblox version's `ClientSettings\ClientAppSettings.json`
-- 📂 **Import Preset** — load a JSON flag preset file
-- 💾 **Export Preset** — save current flags to a JSON file
-- 🗑 **Reset All** — deletes `ClientAppSettings.json` (restores Roblox defaults)
+| | |
+|---|---|
+| 🔍 | **Search / filter** flags by name or value in real time |
+| ➕ | **Add** new flags — auto-detects JSON type (bool / int / float / string) |
+| ✏️ | **Edit** flag values inline — no focus-loss jitter |
+| 🗑 | **Delete** individual flags |
+| ✔ | **Apply to Roblox** — writes to `ClientAppSettings.json` instantly |
+| 📂 | **Import Preset** — load a saved JSON flag file |
+| 💾 | **Export Preset** — save current flags to a JSON file |
+| ↺ | **Reset All** — deletes `ClientAppSettings.json` (restores Roblox defaults) |
+| 🎨 | **Dark theme** — custom palette matching egui 0.33 |
+| 🖼 | **App icon** — embedded in `.exe` and set at runtime |
 
-## Fast Flags File Location
+## Auto-Detection
 
-The app auto-detects the **latest** Roblox version folder:
+The app finds the active Roblox Player installation automatically — no
+configuration needed. Three strategies are tried in order:
+
+1. **Windows Registry** — reads `InstallLocation` from the Roblox uninstall key
+   (`HKCU\...\Uninstall\roblox-player`). Most accurate.
+2. **Exe scan** — walks `%LocalAppData%\Roblox\Versions\version-*\` and picks
+   the folder containing `RobloxPlayerBeta.exe`. Correctly skips Studio folders.
+3. **mtime fallback** — picks the most recently modified `version-*` folder.
+   Works for non-standard / portable installs.
+
+`ClientAppSettings.json` is created automatically on first **Apply** if it
+doesn't already exist.
+
+## Project Structure
 
 ```
-%LocalAppData%\Roblox\Versions\version-<hash>\ClientSettings\ClientAppSettings.json
+roblox-fast-flag-editor/
+├── Cargo.toml
+├── build.rs                  ← embeds icon into .exe via winres
+├── .cargo/config.toml        ← default target: x86_64-pc-windows-gnu
+├── .gitignore
+├── assets/
+│   └── icon.ico              ← multi-size icon (16–256 px)
+└── src/
+    ├── main.rs               ← App state, eframe loop, runtime icon
+    ├── auto_detect.rs        ← Roblox path detection (Registry / exe / mtime)
+    ├── flags.rs              ← FlagStore: load, save, reset, JSON helpers
+    └── ui/
+        ├── mod.rs
+        ├── theme.rs          ← dark colour palette + egui Visuals
+        ├── toolbar.rs        ← Search, Add, Apply, Reset, Import, Export
+        ├── table.rs          ← scrollable flags grid, inline editing
+        ├── modal.rs          ← Add New Flag dialog
+        └── statusbar.rs      ← bottom status bar (auto-clears after ~3 s)
 ```
 
-If the file doesn't exist, it will be created when you click **Apply to Roblox**.
+## Flag Value Types
+
+Values are auto-typed when written to JSON:
+
+| You type | Written as |
+|---|---|
+| `true` / `false` | `bool` |
+| `42` | `integer` |
+| `3.14` | `float` |
+| anything else | `string` |
 
 ## Building
 
 ### Prerequisites
 
-- [Rust toolchain](https://rustup.rs/) (stable)
-- MinGW-w64 for GNU target: `x86_64-w64-mingw32-gcc`
+- [Rust toolchain](https://rustup.rs/) — stable channel
+- MinGW-w64: `x86_64-w64-mingw32-gcc` and `x86_64-w64-mingw32-windres`
 
 ### Windows (native)
 
 ```powershell
-# Add the target if not already present
 rustup target add x86_64-pc-windows-gnu
-
-# Build release binary
-cargo build --release --target x86_64-pc-windows-gnu
+cargo build --release
+# → target\x86_64-pc-windows-gnu\release\roblox-fast-flag-editor.exe
 ```
-
-Output: `target\x86_64-pc-windows-gnu\release\roblox-flag-editor.exe`
 
 ### Cross-compile from Linux
 
 ```bash
-# Install MinGW toolchain
 sudo apt install gcc-mingw-w64-x86-64
-
-# Add Rust target
 rustup target add x86_64-pc-windows-gnu
-
-# Build
-cargo build --release --target x86_64-pc-windows-gnu
+cargo build --release
+# → target/x86_64-pc-windows-gnu/release/roblox-fast-flag-editor.exe
 ```
 
-### Alternatively (Windows MSVC target)
+> The `.cargo/config.toml` sets the default target, so `--target` is optional.
 
-If you prefer MSVC, remove `.cargo/config.toml` and run:
+### MSVC fallback
+
+Delete `.cargo/config.toml` then:
 
 ```powershell
 rustup target add x86_64-pc-windows-msvc
 cargo build --release --target x86_64-pc-windows-msvc
 ```
 
+Note: `build.rs` will skip `winres` icon embedding on MSVC without additional
+setup. The runtime icon (set via `viewport.with_icon()`) always works regardless.
+
 ## Usage
 
-1. Run `roblox-flag-editor.exe`
-2. The app loads existing flags from your Roblox installation automatically
+1. Run `roblox-fast-flag-editor.exe`
+2. Flags load automatically from your Roblox installation
 3. Add / edit / delete flags as needed
-4. Click **✔ Apply to Roblox** to save
-5. Launch Roblox — the flags are now active
-
-## Flag Value Types
-
-Values are auto-detected when saved:
-
-| Input string | JSON type written |
-|---|---|
-| `true` / `false` | boolean |
-| `42` | integer |
-| `3.14` | float |
-| anything else | string |
+4. Click **✔ Apply to Roblox** to write the file
+5. Launch Roblox — flags are active immediately
 
 ## Common Fast Flags
 
-A few examples to get started (not pre-loaded, add manually):
+A few examples to get started (add manually via ➕):
 
 | Flag | Value | Effect |
 |---|---|---|
-| `FIntRenderLocalLightUpdatesMax` | `8` | Reduce local light updates |
-| `FIntTaskSchedulerTargetFps` | `144` | Uncap FPS |
-| `FLogNetwork` | `0` | Disable network logging |
+| `FIntTaskSchedulerTargetFps` | `144` | Uncap framerate |
 | `FFlagDebugGraphicsPreferVulkan` | `true` | Use Vulkan renderer |
+| `FIntRenderLocalLightUpdatesMax` | `8` | Reduce local light update load |
+| `FLogNetwork` | `0` | Disable network logging |
+| `FFlagDisableNewIGMinDUA` | `true` | Disable in-game overlay |
 
-> ⚠️ Fast Flags are internal Roblox engine knobs. Use at your own risk — incorrect values may cause crashes or bans.
+> ⚠️ Fast Flags are internal Roblox engine knobs. Use at your own risk —
+> incorrect values may cause crashes. Roblox may patch or remove flags at any time.

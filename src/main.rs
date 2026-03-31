@@ -1,20 +1,22 @@
-//! Roblox Fast Flags Editor v2.0.0
+//! Roblox Fast Flag Editor v2.0.0
 //!
 //! GUI application to view, edit, and apply Roblox Fast Flags.
 //! Target: x86_64-pc-windows-gnu   Edition: Rust 2024
 //!
 //! Architecture
 //! ─────────────
-//! main.rs      — App state, eframe render loop
-//! flags.rs     — FlagStore: detect path, load, save, reset
-//! ui/theme.rs  — Dark colour palette + egui Visuals
-//! ui/toolbar.rs — Search, Add, Apply, Reset, Import, Export
-//! ui/table.rs  — Scrollable flags grid with inline editing
-//! ui/modal.rs  — "Add New Flag" dialog
-//! ui/statusbar.rs — Bottom status bar
+//! main.rs          — App state, eframe render loop
+//! auto_detect.rs   — Roblox install path detection (Registry / exe / mtime)
+//! flags.rs         — FlagStore: JSON load, save, reset, mutations
+//! ui/theme.rs      — Dark colour palette + egui Visuals
+//! ui/toolbar.rs    — Search, Add, Apply, Reset, Import, Export
+//! ui/table.rs      — Scrollable flags grid with inline editing
+//! ui/modal.rs      — "Add New Flag" dialog
+//! ui/statusbar.rs  — Bottom status bar
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod auto_detect;
 mod flags;
 mod ui;
 
@@ -22,17 +24,32 @@ use eframe::{NativeOptions, egui};
 use egui::ViewportBuilder;
 use flags::FlagStore;
 
+/// ICO file embedded at compile time — decoded to RGBA at startup.
+/// This guarantees the window icon works regardless of the working directory
+/// and regardless of whether `winres` succeeded during the build.
+const APP_ICON: &[u8] = include_bytes!("../assets/icon.ico");
+
+/// Decode the embedded ICO to egui `IconData` (RGBA + dimensions).
+fn load_icon() -> Option<egui::IconData> {
+    let img = image::load_from_memory(APP_ICON).ok()?.into_rgba8();
+    let (w, h) = img.dimensions();
+    Some(egui::IconData { rgba: img.into_raw(), width: w, height: h })
+}
+
 fn main() -> eframe::Result<()> {
-    let options = NativeOptions {
-        viewport: ViewportBuilder::default()
-            .with_title("Roblox Fast Flags Editor")
-            .with_inner_size([920.0, 640.0])
-            .with_min_inner_size([600.0, 400.0]),
-        ..Default::default()
-    };
+    let mut viewport = ViewportBuilder::default()
+        .with_title("Roblox Fast Flag Editor")
+        .with_inner_size([920.0, 640.0])
+        .with_min_inner_size([600.0, 400.0]);
+
+    // Set window icon — title bar, taskbar, Alt+Tab.
+    if let Some(icon) = load_icon() {
+        viewport = viewport.with_icon(std::sync::Arc::new(icon));
+    }
+
     eframe::run_native(
-        "Roblox Fast Flags Editor",
-        options,
+        "Roblox Fast Flag Editor",
+        NativeOptions { viewport, ..Default::default() },
         Box::new(|cc| Ok(Box::new(App::new(cc)))),
     )
 }

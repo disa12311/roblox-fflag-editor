@@ -1,13 +1,13 @@
 [package]
-name = "roblox-flag-editor"
+name = "roblox-fast-flag-editor"
 version = "2.0.0"
 edition = "2024"
-description = "Roblox Fast Flags Editor - Edit and apply Roblox client Fast Flags"
+description = "Roblox Fast Flag Editor - Edit and apply Roblox client Fast Flags"
 authors = ["diep"]
 build = "build.rs"
 
 [[bin]]
-name = "roblox-flag-editor"
+name = "roblox-fast-flag-editor"
 path = "src/main.rs"
 
 [dependencies]
@@ -19,6 +19,7 @@ egui = "0.33"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rfd = "0.17"
+image = { version = "0.25", default-features = false, features = ["ico"] }
 
 [profile.release]
 opt-level = 3

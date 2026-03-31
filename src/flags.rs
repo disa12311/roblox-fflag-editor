@@ -1,32 +1,28 @@
-//! flags.rs — Fast Flags I/O
+//! flags.rs — In-memory Fast Flag store with JSON persistence
 //!
-//! - Auto-detect Roblox Player install path (Registry → exe scan → mtime)
-//! - Read/write `ClientSettings\ClientAppSettings.json`
-//! - In-memory `FlagStore` — sorted `Vec<Flag>`
+//! Owns the sorted `Vec<Flag>` and the target `ClientAppSettings.json` path.
+//! Path detection is delegated to `auto_detect::detect_path()`.
 
-use std::{
-    env,
-    fs,
-    path::{Path, PathBuf},
-    time::SystemTime,
-};
+use std::{fs, path::{Path, PathBuf}};
 
 use serde_json::{Map, Value};
 
-// ─── Data Model ──────────────────────────────────────────────────────────────
+use crate::auto_detect;
+
+// ─── Data model ───────────────────────────────────────────────────────────────
 
 /// A single Fast Flag entry.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Flag {
     pub key:   String,
     pub value: String,
-    /// True when the value has been edited but not yet saved.
+    /// True when the value has been edited but not yet written to disk.
     pub dirty: bool,
 }
 
-// ─── FlagStore ───────────────────────────────────────────────────────────────
+// ─── FlagStore ────────────────────────────────────────────────────────────────
 
-/// In-memory flag store — owns the sorted flag list and the target path.
+/// In-memory flag store — sorted by key, backed by `ClientAppSettings.json`.
 #[derive(Default)]
 pub struct FlagStore {
     pub flags:       Vec<Flag>,
@@ -38,103 +34,13 @@ impl FlagStore {
         Self::default()
     }
 
-    // ── Path Detection ────────────────────────────────────────────────────────
-
-    /// Auto-detect `ClientAppSettings.json` for the active Roblox Player install.
-    ///
-    /// Priority order:
-    /// 1. **Registry** — `HKCU\…\Uninstall\roblox-player → InstallLocation`
-    /// 2. **Exe scan** — find the `version-*` folder containing `RobloxPlayerBeta.exe`
-    /// 3. **mtime fallback** — newest `version-*` folder by modification time
-    pub fn detect_path() -> Result<PathBuf, String> {
-        if let Some(path) = Self::detect_via_registry() {
-            return Ok(path);
-        }
-
-        let local_appdata = env::var("LOCALAPPDATA")
-            .map_err(|_| "LOCALAPPDATA environment variable not found".to_string())?;
-
-        let versions_dir = PathBuf::from(local_appdata)
-            .join("Roblox")
-            .join("Versions");
-
-        if !versions_dir.exists() {
-            return Err(format!(
-                "Roblox not installed (not found: {})",
-                versions_dir.display()
-            ));
-        }
-
-        // Collect all version-* subdirs.
-        // Edition 2024: closures in filter_map capture their upvalues precisely;
-        // no behaviour change here since we only borrow inside the closure.
-        let mut candidates: Vec<(PathBuf, SystemTime)> = fs::read_dir(&versions_dir)
-            .map_err(|e| format!("Cannot read Versions dir: {e}"))?
-            .filter_map(|res| {
-                let entry = res.ok()?;
-                let name  = entry.file_name().to_string_lossy().into_owned();
-                if !name.starts_with("version-") { return None; }
-                let meta  = entry.metadata().ok()?;
-                if !meta.is_dir() { return None; }
-                let mtime = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
-                Some((entry.path(), mtime))
-            })
-            .collect();
-
-        if candidates.is_empty() {
-            return Err("No Roblox version folders found".to_string());
-        }
-
-        // Strategy 2: folder with RobloxPlayerBeta.exe (not Studio).
-        if let Some((dir, _)) = candidates
-            .iter()
-            .find(|(dir, _)| dir.join("RobloxPlayerBeta.exe").exists())
-        {
-            return Ok(client_settings(dir));
-        }
-
-        // Strategy 3: mtime fallback.
-        candidates.sort_by(|a, b| b.1.cmp(&a.1));
-        Ok(client_settings(&candidates[0].0))
-    }
-
-    /// Read `InstallLocation` from the Roblox Player uninstall registry key.
-    /// Uses `reg query` (always available on Windows) — no extra crate needed.
-    /// Returns `None` on non-Windows or when the key is absent.
-    fn detect_via_registry() -> Option<PathBuf> {
-        #[cfg(target_os = "windows")]
-        {
-            use std::process::Command;
-            let out = Command::new("reg")
-                .args([
-                    "query",
-                    r"HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\roblox-player",
-                    "/v",
-                    "InstallLocation",
-                ])
-                .output()
-                .ok()?;
-
-            if !out.status.success() { return None; }
-
-            String::from_utf8_lossy(&out.stdout)
-                .lines()
-                .find(|l| l.contains("InstallLocation"))
-                .and_then(|l| l.find("REG_SZ").map(|pos| l[pos + 6..].trim().to_owned()))
-                .filter(|s| !s.is_empty())
-                .map(|loc| client_settings(Path::new(&loc)))
-        }
-
-        #[cfg(not(target_os = "windows"))]
-        None
-    }
-
     // ── Load ──────────────────────────────────────────────────────────────────
 
-    /// Detect path + load flags. Returns the resolved path string on success.
-    /// Missing file is fine — starts with empty flags (created on first save).
+    /// Auto-detect the Roblox path, then load flags from disk.
+    /// Returns the resolved path string. A missing file is fine —
+    /// starts empty and will be created on the first `save()`.
     pub fn load(&mut self) -> Result<String, String> {
-        let path = Self::detect_path()?;
+        let path = auto_detect::detect_path()?;
         self.target_path = Some(path.clone());
 
         if !path.exists() {
@@ -149,6 +55,7 @@ impl FlagStore {
     }
 
     /// Load flags from an arbitrary file (import preset).
+    /// Does not change `target_path`.
     pub fn load_from_file(&mut self, path: &Path) -> Result<(), String> {
         let content = fs::read_to_string(path)
             .map_err(|e| format!("Cannot read {}: {e}", path.display()))?;
@@ -174,6 +81,7 @@ impl FlagStore {
     // ── Save ──────────────────────────────────────────────────────────────────
 
     /// Write flags to `ClientAppSettings.json`. Creates the directory if needed.
+    /// Clears all dirty markers on success.
     pub fn save(&mut self) -> Result<String, String> {
         let path = self.target_path.clone()
             .ok_or("No target path — load or detect a Roblox version first.")?;
@@ -191,8 +99,7 @@ impl FlagStore {
     }
 
     pub fn to_json_string(&self) -> Result<String, String> {
-        let map: Map<String, Value> = self
-            .flags
+        let map: Map<String, Value> = self.flags
             .iter()
             .map(|f| (f.key.clone(), str_to_json(&f.value)))
             .collect();
@@ -202,11 +109,14 @@ impl FlagStore {
 
     // ── Export / Reset ────────────────────────────────────────────────────────
 
+    /// Export current flags to a user-chosen file path (preset save).
     pub fn export_to_file(&self, path: &Path) -> Result<(), String> {
         fs::write(path, self.to_json_string()?)
             .map_err(|e| format!("Cannot write preset: {e}"))
     }
 
+    /// Delete `ClientAppSettings.json` and clear the in-memory list.
+    /// Roblox will use its built-in defaults on next launch.
     pub fn reset(&mut self) -> Result<(), String> {
         if let Some(path) = &self.target_path {
             if path.exists() {
@@ -220,7 +130,7 @@ impl FlagStore {
 
     // ── Mutations ─────────────────────────────────────────────────────────────
 
-    /// Insert or update a flag; keeps the list sorted by key.
+    /// Insert a new flag or update an existing one. Keeps the list sorted.
     pub fn set_flag(&mut self, key: String, value: String) {
         if let Some(flag) = self.flags.iter_mut().find(|f| f.key == key) {
             if flag.value != value {
@@ -233,19 +143,15 @@ impl FlagStore {
         }
     }
 
+    /// Remove a flag by key.
     pub fn remove_flag(&mut self, key: &str) {
         self.flags.retain(|f| f.key != key);
     }
 }
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
+// ─── JSON helpers ─────────────────────────────────────────────────────────────
 
-/// Build `ClientSettings/ClientAppSettings.json` path from a version directory.
-fn client_settings(dir: &Path) -> PathBuf {
-    dir.join("ClientSettings").join("ClientAppSettings.json")
-}
-
-/// Deserialise a JSON value to its display string (strings unquoted).
+/// Deserialise a JSON value to its display string (strings are unquoted).
 fn json_to_str(v: &Value) -> String {
     match v {
         Value::String(s) => s.clone(),
@@ -253,16 +159,17 @@ fn json_to_str(v: &Value) -> String {
     }
 }
 
-/// Re-serialise a string value to the best-fit JSON type.
-/// `"true"` → Bool, `"42"` → Number(i64), `"3.14"` → Number(f64), else String.
+/// Re-serialise a user string to the best-fit JSON type:
+/// `"true"/"false"` → Bool, integer string → Number(i64),
+/// float string → Number(f64), anything else → String.
 pub fn str_to_json(s: &str) -> Value {
     match s.to_lowercase().as_str() {
         "true"  => return Value::Bool(true),
         "false" => return Value::Bool(false),
         _       => {}
     }
-    if let Ok(n) = s.parse::<i64>()   { return Value::Number(n.into()); }
-    if let Ok(f) = s.parse::<f64>()   {
+    if let Ok(n) = s.parse::<i64>() { return Value::Number(n.into()); }
+    if let Ok(f) = s.parse::<f64>() {
         if let Some(n) = serde_json::Number::from_f64(f) { return Value::Number(n); }
     }
     Value::String(s.to_string())
